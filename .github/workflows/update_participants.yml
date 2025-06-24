@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -20,13 +23,28 @@ jobs:
           pip install requests
       - name: Run update script
         run: python update_participants.py
-      - name: Commit and push database changes
+      - name: Set up git user
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Add and commit changes
+        run: |
           git add participants.db
           git commit -m "Automated DB update" || echo "No changes to commit"
-          git pull --rebase
-          git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/Gth790/tournament-tracker.git HEAD:main
+      - name: Debug - git status before push
+        run: git status
+      - name: Debug - git log before push
+        run: git log -1
+      - name: Set remote URL with PAT
+        run: |
+          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/Gth790/tournament-tracker.git
         env:
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      - name: Pull with rebase
+        run: git pull --rebase origin main
+      - name: Push changes
+        run: git push origin HEAD:main
+      - name: Debug - git status after push
+        run: git status
+      - name: Debug - git log after push
+        run: git log -1
