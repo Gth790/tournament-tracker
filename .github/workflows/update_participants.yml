@@ -27,6 +27,6 @@ jobs:
           git add participants.db
           git commit -m "Automated DB update" || echo "No changes to commit"
           git pull --rebase
-          git push
+          git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/Gth790/tournament-tracker.git HEAD:main
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
