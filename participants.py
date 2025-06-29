@@ -155,6 +155,38 @@ st_autorefresh(interval=60*60*1000, key="autorefresh")  # hourly refresh
 
 # Show tracked tournaments
 df_tracked = pd.DataFrame(get_tracked())
+
+# Build a mapping of tournament_id to tournament_name for all tournaments ever tracked
+all_tids = get_all_tournament_ids()
+# Get names for all_tids from tracked and participants tables
+id_to_name = {}
+for row in get_tracked():
+    if row.get('tournament_id') and row.get('tournament_name'):
+        id_to_name[row['tournament_id']] = row['tournament_name']
+# Fallback: try to get names from participants table if not in tracked
+def get_name_from_participants(tid):
+    res = supabase.table("participants").select("name").eq("tournament_id", tid).limit(1).execute()
+    if res.data and len(res.data) > 0:
+        return res.data[0].get('name')
+    return None
+for tid in all_tids:
+    if tid not in id_to_name:
+        name = get_name_from_participants(tid)
+        if name:
+            id_to_name[tid] = name
+# Build display options for dropdowns
+def display_label(tid):
+    name = id_to_name.get(tid)
+    return f"{name} ({tid})" if name else str(tid)
+remove_options = [''] + [display_label(tid) for tid in df_tracked['tournament_id'].tolist()] if not df_tracked.empty else ['']
+remove_map = {display_label(tid): tid for tid in df_tracked['tournament_id'].tolist()} if not df_tracked.empty else {}
+update_options = [''] + [display_label(tid) for tid in df_tracked['tournament_id'].tolist()] if not df_tracked.empty else ['']
+update_map = {display_label(tid): tid for tid in df_tracked['tournament_id'].tolist()} if not df_tracked.empty else {}
+csv_options = [''] + [display_label(tid) for tid in all_tids]
+csv_map = {display_label(tid): tid for tid in all_tids}
+show_options = [''] + [display_label(tid) for tid in all_tids]
+show_map = {display_label(tid): tid for tid in all_tids}
+
 st.subheader('Tracked Tournaments')
 st.dataframe(df_tracked)
 
@@ -172,7 +204,8 @@ with st.form('add_tournament'):
         st.rerun()
 
 # Remove tournament
-remove_tid = st.selectbox('Stop tracking tournament', [''] + df_tracked['tournament_id'].tolist() if not df_tracked.empty else [''])
+remove_tid_label = st.selectbox('Stop tracking tournament', remove_options)
+remove_tid = remove_map.get(remove_tid_label, '')
 if remove_tid:
     if st.button('Remove selected tournament'):
         with lock:
@@ -180,11 +213,9 @@ if remove_tid:
         st.success(f'Stopped tracking {remove_tid}')
         st.rerun()
 
-# Get all tournaments ever tracked (for CSV/participants)
-all_tids = get_all_tournament_ids()
-
 # Manual update (only for currently tracked)
-update_tid = st.selectbox('Manually update tournament', [''] + df_tracked['tournament_id'].tolist() if not df_tracked.empty else [''])
+update_tid_label = st.selectbox('Manually update tournament', update_options)
+update_tid = update_map.get(update_tid_label, '')
 if update_tid:
     if st.button('Update selected tournament'):
         update_tournament(update_tid)
@@ -192,7 +223,8 @@ if update_tid:
         st.rerun()
 
 # Download CSV (for all ever tracked)
-csv_tid = st.selectbox('Download CSV for tournament', [''] + all_tids)
+csv_tid_label = st.selectbox('Download CSV for tournament', csv_options)
+csv_tid = csv_map.get(csv_tid_label, '')
 if csv_tid:
     csv_data = export_csv(csv_tid)
     st.download_button(
@@ -203,7 +235,8 @@ if csv_tid:
     )
 
 # Show participants for selected tournament (for all ever tracked)
-show_tid = st.selectbox('Show participants for tournament', [''] + all_tids)
+show_tid_label = st.selectbox('Show participants for tournament', show_options)
+show_tid = show_map.get(show_tid_label, '')
 if show_tid:
     df_part = pd.DataFrame(supabase.table("participants").select("*").eq("tournament_id", show_tid).execute().data)
     st.dataframe(df_part)
