@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 import os
 import csv
 import threading
@@ -9,54 +8,14 @@ from datetime import datetime
 from io import StringIO
 from apscheduler.schedulers.background import BackgroundScheduler
 from streamlit_autorefresh import st_autorefresh
+from supabase import create_client, Client
 
-DB_FILE = 'participants.db'
+SUPABASE_URL = "https://zkszohjgstfkdjjklraq.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inprc3pvaGpnc3Rma2RqamtscmFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTExNzM4MjksImV4cCI6MjA2Njc0OTgyOX0.a7t29H0o8_fu3pK7OFvQ256-8HpAhsEVC4FuoLBDefY"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 CSV_DIR = 'csv_exports'
 os.makedirs(CSV_DIR, exist_ok=True)
-
-# Database initialization
-def init_db(drop=False):
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    cur = conn.cursor()
-    if drop:
-        cur.execute('DROP TABLE IF EXISTS participants')
-        cur.execute('DROP TABLE IF EXISTS changes')
-        cur.execute('DROP TABLE IF EXISTS tracked')
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS participants (
-            tournament_id TEXT,
-            participant_id TEXT,
-            name TEXT,
-            status TEXT,
-            joined_date TEXT,
-            left_date TEXT,
-            PRIMARY KEY (tournament_id, participant_id)
-        )
-    ''')
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS changes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tournament_id TEXT,
-            participant_id TEXT,
-            change_type TEXT,
-            change_date TEXT
-        )
-    ''')
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS tracked (
-            tournament_id TEXT PRIMARY KEY,
-            last_run TEXT,
-            tournament_name TEXT
-        )
-    ''')
-    try:
-        cur.execute('ALTER TABLE tracked ADD COLUMN tournament_name TEXT')
-    except sqlite3.OperationalError:
-        pass
-    conn.commit()
-    return conn, cur
-
-conn, cur = init_db()
 lock = threading.Lock()
 
 # Fetch participants from API
@@ -85,72 +44,88 @@ def fetch_participants(tid):
     except Exception:
         return []
 
-# Update tournament data
+def get_tracked():
+    res = supabase.table("tracked").select("*").execute()
+    return res.data or []
+
+def add_tournament(tid, tname, now):
+    supabase.table("tracked").upsert({
+        "tournament_id": tid,
+        "last_run": now,
+        "tournament_name": tname
+    }).execute()
+
+def remove_tournament(tid):
+    supabase.table("tracked").delete().eq("tournament_id", tid).execute()
+    supabase.table("participants").delete().eq("tournament_id", tid).execute()
+    supabase.table("changes").delete().eq("tournament_id", tid).execute()
+
 def update_tournament(tid):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entries = fetch_participants(tid)
     with lock:
-        cur.execute('SELECT tournament_name FROM tracked WHERE tournament_id=?', (tid,))
-        existing = cur.fetchone()
-        existing_name = existing[0] if existing else None
-        cur.execute('REPLACE INTO tracked (tournament_id, last_run, tournament_name) VALUES (?,?,?)',
-                    (tid, now, existing_name))
-        cur.execute('SELECT COUNT(*) FROM participants WHERE tournament_id=?', (tid,))
-        count = cur.fetchone()[0]
-        if count == 0:
+        tracked = supabase.table("tracked").select("*").eq("tournament_id", tid).execute().data
+        existing_name = tracked[0]["tournament_name"] if tracked else None
+        add_tournament(tid, existing_name, now)
+        participants = supabase.table("participants").select("participant_id, status").eq("tournament_id", tid).execute().data
+        stored = {row["participant_id"]: row["status"] for row in participants} if participants else {}
+        if not stored:
             for pid, name in entries:
-                cur.execute(
-                    'INSERT INTO participants (tournament_id,participant_id,name,status,joined_date,left_date) VALUES (?,?,?,?,?,?)',
-                    (tid, pid, name, 'active', now, None)
-                )
-            conn.commit()
+                supabase.table("participants").upsert({
+                    "tournament_id": tid,
+                    "participant_id": pid,
+                    "name": name,
+                    "status": "active",
+                    "joined_date": now,
+                    "left_date": None
+                }).execute()
             return
-        cur.execute('SELECT participant_id, status FROM participants WHERE tournament_id=?', (tid,))
-        stored = {row[0]: row[1] for row in cur.fetchall()}
         for pid, name in entries:
             if pid not in stored:
-                cur.execute(
-                    'INSERT INTO participants (tournament_id,participant_id,name,status,joined_date,left_date) VALUES (?,?,?,?,?,?)',
-                    (tid, pid, name, 'active', now, None)
-                )
-                cur.execute(
-                    'INSERT INTO changes (tournament_id,participant_id,change_type,change_date) VALUES (?,?,?,?)',
-                    (tid, pid, 'joined', now)
-                )
+                supabase.table("participants").upsert({
+                    "tournament_id": tid,
+                    "participant_id": pid,
+                    "name": name,
+                    "status": "active",
+                    "joined_date": now,
+                    "left_date": None
+                }).execute()
+                supabase.table("changes").insert({
+                    "tournament_id": tid,
+                    "participant_id": pid,
+                    "change_type": "joined",
+                    "change_date": now
+                }).execute()
         for pid, status in stored.items():
             if status == 'active' and pid not in dict(entries):
-                cur.execute(
-                    'UPDATE participants SET status=?, left_date=? WHERE tournament_id=? AND participant_id=?',
-                    ('left', now, tid, pid)
-                )
-                cur.execute(
-                    'INSERT INTO changes (tournament_id,participant_id,change_type,change_date) VALUES (?,?,?,?)',
-                    (tid, pid, 'left', now)
-                )
-        conn.commit()
+                supabase.table("participants").update({
+                    "status": "left",
+                    "left_date": now
+                }).eq("tournament_id", tid).eq("participant_id", pid).execute()
+                supabase.table("changes").insert({
+                    "tournament_id": tid,
+                    "participant_id": pid,
+                    "change_type": "left",
+                    "change_date": now
+                }).execute()
 
-# Export CSV
 def export_csv(tid):
-    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    rows = cur.execute(
-        'SELECT participant_id,name,status,joined_date,left_date FROM participants WHERE tournament_id=?',
-        (tid,)
-    ).fetchall()
+    rows = supabase.table("participants").select("participant_id,name,status,joined_date,left_date").eq("tournament_id", tid).execute().data
     output = StringIO()
     writer = csv.writer(output, delimiter=';')
     writer.writerow(['ID','Name','Status','Joined','Left'])
-    for pid,name,status,j,l in rows:
-        writer.writerow([pid, name, status, j or '', l or ''])
+    for row in rows:
+        writer.writerow([row['participant_id'], row['name'], row['status'], row['joined_date'] or '', row['left_date'] or ''])
     return output.getvalue()
 
 # Scheduler for hourly update
 def update_all_tracked():
-    tracked = cur.execute('SELECT tournament_id FROM tracked').fetchall()
-    for (tid,) in tracked:
+    tracked = get_tracked()
+    for row in tracked:
         try:
-            update_tournament(tid)
+            update_tournament(row['tournament_id'])
         except Exception as e:
-            print(f"Error updating {tid}: {e}", file=sys.stderr)
+            print(f"Error updating {row['tournament_id']}: {e}", file=sys.stderr)
 
 # Start scheduler in background
 def start_scheduler():
@@ -167,7 +142,7 @@ st.title('Tournament Tracker (Streamlit)')
 st_autorefresh(interval=60*60*1000, key="autorefresh")  # hourly refresh
 
 # Show tracked tournaments
-df_tracked = pd.read_sql('SELECT tournament_id, tournament_name, last_run FROM tracked', conn)
+df_tracked = pd.DataFrame(get_tracked())
 st.subheader('Tracked Tournaments')
 st.dataframe(df_tracked)
 
@@ -179,25 +154,22 @@ with st.form('add_tournament'):
     if submit and tid:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with lock:
-            cur.execute('REPLACE INTO tracked (tournament_id, last_run, tournament_name) VALUES (?,?,?)',
-                        (tid, now, tname or None))
-            conn.commit()
+            add_tournament(tid, tname or None, now)
         update_tournament(tid)
         st.success(f'Initialized {tid}')
         st.rerun()
 
 # Remove tournament
-remove_tid = st.selectbox('Stop tracking tournament', [''] + df_tracked['tournament_id'].tolist())
+remove_tid = st.selectbox('Stop tracking tournament', [''] + df_tracked['tournament_id'].tolist() if not df_tracked.empty else [''])
 if remove_tid:
     if st.button('Remove selected tournament'):
         with lock:
-            cur.execute('DELETE FROM tracked WHERE tournament_id=?', (remove_tid,))
-            conn.commit()
+            remove_tournament(remove_tid)
         st.success(f'Stopped tracking {remove_tid}')
         st.rerun()
 
 # Manual update
-update_tid = st.selectbox('Manually update tournament', [''] + df_tracked['tournament_id'].tolist())
+update_tid = st.selectbox('Manually update tournament', [''] + df_tracked['tournament_id'].tolist() if not df_tracked.empty else [''])
 if update_tid:
     if st.button('Update selected tournament'):
         update_tournament(update_tid)
@@ -205,7 +177,7 @@ if update_tid:
         st.rerun()
 
 # Download CSV
-csv_tid = st.selectbox('Download CSV for tournament', [''] + df_tracked['tournament_id'].tolist())
+csv_tid = st.selectbox('Download CSV for tournament', [''] + df_tracked['tournament_id'].tolist() if not df_tracked.empty else [''])
 if csv_tid:
     csv_data = export_csv(csv_tid)
     st.download_button(
@@ -216,9 +188,9 @@ if csv_tid:
     )
 
 # Show participants for selected tournament
-show_tid = st.selectbox('Show participants for tournament', [''] + df_tracked['tournament_id'].tolist())
+show_tid = st.selectbox('Show participants for tournament', [''] + df_tracked['tournament_id'].tolist() if not df_tracked.empty else [''])
 if show_tid:
-    df_part = pd.read_sql('SELECT * FROM participants WHERE tournament_id=?', conn, params=(show_tid,))
+    df_part = pd.DataFrame(supabase.table("participants").select("*").eq("tournament_id", show_tid).execute().data)
     st.dataframe(df_part)
 
 st.markdown('---')
