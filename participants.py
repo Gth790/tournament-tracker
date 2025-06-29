@@ -57,8 +57,7 @@ def add_tournament(tid, tname, now):
 
 def remove_tournament(tid):
     supabase.table("tracked").delete().eq("tournament_id", tid).execute()
-    supabase.table("participants").delete().eq("tournament_id", tid).execute()
-    supabase.table("changes").delete().eq("tournament_id", tid).execute()
+    # Do NOT delete from participants or changes anymore
 
 def update_tournament(tid):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -118,6 +117,15 @@ def export_csv(tid):
         writer.writerow([row['participant_id'], row['name'], row['status'], row['joined_date'] or '', row['left_date'] or ''])
     return output.getvalue()
 
+def get_all_tournament_ids():
+    # Get all unique tournament_ids from participants table
+    res = supabase.table("participants").select("tournament_id").execute()
+    ids = set(row['tournament_id'] for row in res.data) if res.data else set()
+    # Also include currently tracked tournaments
+    tracked = get_tracked()
+    ids.update(row['tournament_id'] for row in tracked)
+    return sorted(ids)
+
 # Scheduler for hourly update
 def update_all_tracked():
     tracked = get_tracked()
@@ -168,7 +176,10 @@ if remove_tid:
         st.success(f'Stopped tracking {remove_tid}')
         st.rerun()
 
-# Manual update
+# Get all tournaments ever tracked (for CSV/participants)
+all_tids = get_all_tournament_ids()
+
+# Manual update (only for currently tracked)
 update_tid = st.selectbox('Manually update tournament', [''] + df_tracked['tournament_id'].tolist() if not df_tracked.empty else [''])
 if update_tid:
     if st.button('Update selected tournament'):
@@ -176,8 +187,8 @@ if update_tid:
         st.success(f'Updated {update_tid}')
         st.rerun()
 
-# Download CSV
-csv_tid = st.selectbox('Download CSV for tournament', [''] + df_tracked['tournament_id'].tolist() if not df_tracked.empty else [''])
+# Download CSV (for all ever tracked)
+csv_tid = st.selectbox('Download CSV for tournament', [''] + all_tids)
 if csv_tid:
     csv_data = export_csv(csv_tid)
     st.download_button(
@@ -187,8 +198,8 @@ if csv_tid:
         mime='text/csv'
     )
 
-# Show participants for selected tournament
-show_tid = st.selectbox('Show participants for tournament', [''] + df_tracked['tournament_id'].tolist() if not df_tracked.empty else [''])
+# Show participants for selected tournament (for all ever tracked)
+show_tid = st.selectbox('Show participants for tournament', [''] + all_tids)
 if show_tid:
     df_part = pd.DataFrame(supabase.table("participants").select("*").eq("tournament_id", show_tid).execute().data)
     st.dataframe(df_part)
