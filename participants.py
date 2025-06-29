@@ -9,6 +9,7 @@ from io import StringIO
 from apscheduler.schedulers.background import BackgroundScheduler
 from streamlit_autorefresh import st_autorefresh
 from supabase import create_client, Client
+import pytz
 
 SUPABASE_URL = "https://zkszohjgstfkdjjklraq.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inprc3pvaGpnc3Rma2RqamtscmFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTExNzM4MjksImV4cCI6MjA2Njc0OTgyOX0.a7t29H0o8_fu3pK7OFvQ256-8HpAhsEVC4FuoLBDefY"
@@ -64,7 +65,8 @@ def remove_tournament(tid):
     # Do NOT delete from participants or changes anymore
 
 def update_tournament(tid):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stockholm = pytz.timezone('Europe/Stockholm')
+    now = datetime.now(stockholm).strftime("%Y-%m-%d %H:%M:%S")
     entries = fetch_participants(tid)
     with lock:
         tracked = supabase.table("tracked").select("*").eq("tournament_id", tid).execute().data
@@ -196,7 +198,8 @@ with st.form('add_tournament'):
     tname = st.text_input('Tournament Name (optional)')
     submit = st.form_submit_button('Add & Initialize')
     if submit and tid:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stockholm = pytz.timezone('Europe/Stockholm')
+        now = datetime.now(stockholm).strftime("%Y-%m-%d %H:%M:%S")
         with lock:
             add_tournament(tid, tname or None, now)
         update_tournament(tid)
