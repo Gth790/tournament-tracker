@@ -45,10 +45,12 @@ def fetch_participants(tid):
         return []
 
 def get_tracked():
-    res = supabase.table("tracked").select("*").execute()
-    if res.error:
-        st.error(f"Supabase error: {res.error}")
-    return res.data or []
+    try:
+        res = supabase.table("tracked").select("*").execute()
+        return res.data or []
+    except Exception as e:
+        st.error(f"Supabase error: {e}")
+        return []
 
 def add_tournament(tid, tname, now):
     supabase.table("tracked").upsert({
