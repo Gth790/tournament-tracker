@@ -46,6 +46,8 @@ def fetch_participants(tid):
 
 def get_tracked():
     res = supabase.table("tracked").select("*").execute()
+    if res.error:
+        st.error(f"Supabase error: {res.error}")
     return res.data or []
 
 def add_tournament(tid, tname, now):
@@ -151,6 +153,7 @@ st_autorefresh(interval=60*60*1000, key="autorefresh")  # hourly refresh
 
 # Show tracked tournaments
 df_tracked = pd.DataFrame(get_tracked())
+st.write("DEBUG: Tracked tournaments from Supabase:", df_tracked)
 st.subheader('Tracked Tournaments')
 st.dataframe(df_tracked)
 
