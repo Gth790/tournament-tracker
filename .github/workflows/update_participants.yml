@@ -1,8 +1,8 @@
-name: Hourly Tournament Update
+name: Daily Tournament Update
 
 on:
   schedule:
-    - cron: '0 * * * *'  # every hour
+    - cron: '0 21 * * *'  # daily at 23:00 Stockholm time (21:00 UTC in summer, 22:00 UTC in winter)
   workflow_dispatch:
 
 jobs:
