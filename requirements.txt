@@ -1,7 +1,6 @@
-streamlit
+flask
 pandas
 requests
-apscheduler
-streamlit-autorefresh
 supabase
 pytz
+gunicorn
